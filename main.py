@@ -9,6 +9,8 @@ from pytz import timezone
 from flask import render_template
 from flask import Flask
 
+import requests
+
 TZ = timezone('Europe/Moscow')
 EDA_START_TIME_MSK = time(9, 0)
 EDA_END_TIME_MSK = time(23, 1)
@@ -43,10 +45,17 @@ def alarm(context: CallbackContext) -> None:
     job_name = ctx['job_name']
     chat_id = ctx['chat_id']
     due = create_job(context, job_name, chat_id)
-    context.bot.send_message(
-        chat_id,
-        f'🥣 Пора есть, следующее напоминание: {due.strftime("%H:%M:%S")}'
-    )
+    anek = ""
+    try:
+        resp = requests.get('http://rzhunemogu.ru/RandJSON.aspx?CType=1')
+        anek = resp.text.replace('{"content":"', '').replace('"}', '')
+    except:
+        None
+    msg = '🥣 Пора есть, следующее напоминание: ' + due.strftime("%H:%M")
+    if anek:
+        msg += f'\n\n===\n{anek}'
+    print(msg)
+    context.bot.send_message(chat_id, msg)
 
 
 def create_job(context: CallbackContext, job_name: str,
@@ -83,7 +92,7 @@ def set_eda_timer(update: Update,
     else:
         due = create_job(context, job_name, chat_id)
         update.effective_message.reply_text(
-            f'Напоминание установлено на {due.strftime("%H:%M:%S")}')
+            f'Напоминание установлено на {due.strftime("%H:%M")}')
 
 
 def unset(update: Update, context: CallbackContext, job_name: str) -> None:
@@ -100,7 +109,7 @@ def timer_list(update: Update, context: CallbackContext,
     current_jobs = context.job_queue.get_jobs_by_name(job_name)
     l = []
     for job in current_jobs:
-        l.append(job.next_t.astimezone(TZ).strftime("%H:%M:%S"))
+        l.append(job.next_t.astimezone(TZ).strftime("%H:%M"))
     context.bot.send_message(chat_id, text="Напоминания: " + ", ".join(l))
 
 
@@ -112,7 +121,7 @@ def main():
     dispatcher.add_handler(CommandHandler("help", help_command))
     dispatcher.add_handler(CommandHandler("eda", set_eda_timer))
 
-    #    dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), log))
+    #dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), log))
 
     updater.start_polling()
 
