@@ -1,59 +1,107 @@
 import os
-from replit import db
 
-from telegram import Update #upm package(python-telegram-bot)
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext  #upm package(python-telegram-bot)
+from telegram import Update  #upm package(python-telegram-bot)
+from telegram.ext import Updater, CommandHandler, CallbackContext  #upm package(python-telegram-bot)
 
+from datetime import time, datetime, timedelta
+from pytz import timezone
 
-from math import ceil
 from flask import render_template
 from flask import Flask
+
+TZ = timezone('Europe/Moscow')
+EDA_START_TIME_MSK = time(9, 0)
+EDA_END_TIME_MSK = time(23, 1)
+EDA_PERIOD_SEC = 3 * 3600
+
 app = Flask(__name__)
 
+
 @app.route('/')
-@app.route('/<int:page>')
 def home(page=None):
-    ks = sorted(map(int, db.keys()))
-    pages = ceil(len(ks) / 10)
-    if page is None: #Default to latest page
-        page = pages
-
-    if page < pages:
-        next_page = page + 1
-    else:
-        next_page = None
-    if page > 1:
-        prev_page = page - 1
-    else:
-        prev_page = None
-
-    messages = tuple(db[str(key)] for key in ks[(page-1)*10:page*10])
-
-    return render_template('home.html', messages=messages, next_page=next_page, page=page, prev_page=prev_page)
-
-
-def latest_key():
-    ks = db.keys()
-    if len(ks):
-        return max(map(int, ks))
-    else:
-        return -1
+    return render_template('home.html')
 
 
 def help_command(update: Update, context: CallbackContext) -> None:
-    htext = '''
-Welcome
-Send a message to store it.
-Send /fetch to retrieve the most recent message'''
-    update.message.reply_text(htext)
+    update.message.reply_text(
+        'Привет! Отправь /eda для напоминания о еде. `/eda stop` для отмены напоминаний'
+    )
 
 
-def log(update: Update, context: CallbackContext) -> None:
-    db[str(latest_key() + 1)] = update.message.text
+def remove_job_if_exists(name: str, context: CallbackContext) -> bool:
+    """Remove job with given name. Returns whether job was removed."""
+    current_jobs = context.job_queue.get_jobs_by_name(name)
+    if not current_jobs:
+        return False
+    for job in current_jobs:
+        job.schedule_removal()
+    return True
 
 
-def fetch(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(db.get(str(latest_key()), 'No Messages Yet.'))
+def alarm(context: CallbackContext) -> None:
+    ctx = context.job.context
+    job_name = ctx['job_name']
+    chat_id = ctx['chat_id']
+    due = create_job(context, job_name, chat_id)
+    context.bot.send_message(
+        chat_id,
+        f'🥣 Пора есть, следующее напоминание: {due.strftime("%H:%M:%S")}'
+    )
+
+
+def create_job(context: CallbackContext, job_name: str,
+               chat_id: int) -> datetime:
+    remove_job_if_exists(job_name, context)
+    now = datetime.now(TZ)
+    due = now + timedelta(seconds=EDA_PERIOD_SEC)
+    if due > TZ.localize(datetime.combine(now, EDA_END_TIME_MSK)):
+        due = TZ.localize(
+            datetime.combine(now + timedelta(days=1), EDA_START_TIME_MSK))
+    context.job_queue.run_once(alarm,
+                               due,
+                               name=job_name,
+                               context={
+                                   'chat_id': chat_id,
+                                   'job_name': job_name
+                               })
+    return due
+
+
+def set_eda_timer(update: Update,
+                  context: CallbackContext,
+                  text: str = "") -> None:
+    chat_id = update.effective_message.chat_id
+    job_name = "eda_" + str(chat_id)
+    cmd = context.args[0] if len(context.args) > 0 else ''
+
+    if cmd in ['stop']:
+        unset(update, context, job_name)
+
+    elif cmd in ['show', 'list']:
+        timer_list(update, context, job_name)
+
+    else:
+        due = create_job(context, job_name, chat_id)
+        update.effective_message.reply_text(
+            f'Напоминание установлено на {due.strftime("%H:%M:%S")}')
+
+
+def unset(update: Update, context: CallbackContext, job_name: str) -> None:
+    """Remove the job if the user changed their mind."""
+    chat_id = update.message.chat_id
+    job_removed = remove_job_if_exists(job_name, context)
+    text = "Напоминания отменены!" if job_removed else "Никаких напоминаний и не было запланировано."
+    context.bot.send_message(chat_id, text)
+
+
+def timer_list(update: Update, context: CallbackContext,
+               job_name: str) -> None:
+    chat_id = update.message.chat_id
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    l = []
+    for job in current_jobs:
+        l.append(job.next_t.astimezone(TZ).strftime("%H:%M:%S"))
+    context.bot.send_message(chat_id, text="Напоминания: " + ", ".join(l))
 
 
 def main():
@@ -62,9 +110,9 @@ def main():
     dispatcher = updater.dispatcher
     dispatcher.add_handler(CommandHandler("start", help_command))
     dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("fetch", fetch))
+    dispatcher.add_handler(CommandHandler("eda", set_eda_timer))
 
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, log))
+    #    dispatcher.add_handler(MessageHandler(Filters.text & (~Filters.command), log))
 
     updater.start_polling()
 
