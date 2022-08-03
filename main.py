@@ -1,5 +1,7 @@
 import os
 
+from threading import Thread
+
 from telegram import Update  #upm package(python-telegram-bot)
 from telegram.ext import Updater, CommandHandler, CallbackContext  #upm package(python-telegram-bot)
 
@@ -18,10 +20,15 @@ EDA_PERIOD_SEC = 3 * 3600
 
 app = Flask(__name__)
 
+BOT_START_DATE = datetime.now(TZ)
+
 
 @app.route('/')
 def home(page=None):
-    return render_template('home.html')
+    print("check: " + datetime.now(TZ).strftime("%d.%m.%y %H:%M") + " -> " +
+          BOT_START_DATE.strftime("%d.%m.%y %H:%M"))
+    return render_template('home.html',
+                           start_dt=BOT_START_DATE.strftime("%d.%m.%y %H:%M"))
 
 
 def help_command(update: Update, context: CallbackContext) -> None:
@@ -113,6 +120,10 @@ def timer_list(update: Update, context: CallbackContext,
     context.bot.send_message(chat_id, text="Напоминания: " + ", ".join(l))
 
 
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+
 def main():
     updater = Updater(os.getenv("TOKEN"))
 
@@ -125,8 +136,10 @@ def main():
 
     updater.start_polling()
 
-    #updater.idle()
-    app.run(host='0.0.0.0', port=8080)
+    t = Thread(target=run)
+    t.start()
+    updater.idle()
+    #app.run(host='0.0.0.0', port=8080)
 
 
 if __name__ == '__main__':
